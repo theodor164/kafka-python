@@ -82,3 +82,10 @@ services:
       - 8080:8080
     depends_on:
       - redpanda-0
+#  kcat:
+#    image: edenhill/kcat:1.7.1
+#    command: [ "-b", "redpanda-0:9092", "-L" ]
+#    depends_on:
+#      - redpanda-0
+#      - redpanda-1
+#      - redpanda-2

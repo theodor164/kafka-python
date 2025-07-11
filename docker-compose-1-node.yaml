@@ -1,4 +1,4 @@
-version: '3.7'
+# version: '3.7' # https://docs.docker.com/reference/compose-file/version-and-name/
 name: redpanda-services
 services:
   redpanda:
@@ -38,3 +38,43 @@ services:
       - 8080:8080
     depends_on:
       - redpanda
+  # kcat container will get exited after listing the metadata from the Broker
+  # So, if we want to run any other command, like reading the data from topic
+  # we can run from command Line, Something like below
+  # docker run -it --rm \
+  #        edenhill/kcat \
+  #                -b kafka-broker:9092 \  # broker
+  #                -t test \  # topic
+  #                -r http://redpanda:8081 # schema-registry
+  #                -o 0  # offset
+  #                -C # consume
+  #                -J # JSON output
+  #                -s value=avro # deserialize Avro Message.value
+  kcat:
+    image: edenhill/kcat:1.7.1
+    command: ["-L", "-b", "redpanda:9092"]  # Default command to list metadata for a broker
+    depends_on:
+      - redpanda
+
+  # https://hub.docker.com/r/confluentinc/ksqldb-server
+  ksqldb-server:
+    image: confluentinc/ksqldb-server
+    container_name: ksqldb-server
+    depends_on:
+      - redpanda
+    ports:
+      - 8088:8088
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: "redpanda:9092"  # tells ksql-db which kafka broker to connect
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: "http://redpanda:8081"  # Tells ksqlDB where the Schema Registry is  (useful in case if AVRO/JSON/Protobuf)
+      KSQL_LISTENERS: "http://0.0.0.0:8088" # Specify the address where the ksqlDB should listen
+      KSQL_CACHE_MAX_BYTES_BUFFERING: 0 # executes queries with no buffering
+
+  # https://hub.docker.com/r/confluentinc/ksqldb-cli
+  ksqldb-cli:
+    image: confluentinc/ksqldb-cli
+    container_name: ksqldb-cli
+    depends_on:
+      - ksqldb-server
+    entrypoint: /bin/sh
+    tty: true # without this, container will started and exited (This is to simulate a terminal)
