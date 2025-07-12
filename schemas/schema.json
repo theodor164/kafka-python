@@ -1,4 +1,5 @@
 {
+    "title": "User",
     "type": "object",
     "properties": {
         "first_name": {

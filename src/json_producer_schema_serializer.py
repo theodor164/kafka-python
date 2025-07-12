@@ -4,7 +4,6 @@ by getting the schema from the Schema Registry
 CANNOT test - https://github.com/redpanda-data/redpanda/issues/14462
 Redpanda does not support JSON Schema Registry
 """
-import json
 import logging
 import os
 
@@ -13,6 +12,9 @@ import utils
 from admin import Admin
 from producer import ProducerClass
 from schema_registry_client import SchemaClient
+from confluent_kafka.schema_registry.json_schema import JSONSerializer
+from confluent_kafka.serialization import SerializationContext, MessageField
+from confluent_kafka.schema_registry import SchemaRegistryClient
 
 
 class User:
@@ -35,16 +37,24 @@ def user_to_dict(user):
 
 
 class JSONProducer(ProducerClass):
-    def __init__(self, bootstrap_server, topic):
+    def __init__(self, bootstrap_server, topic, schema_registry_url, json_schema):
         super().__init__(bootstrap_server, topic)
-        self.value_serializer = lambda v: json.dumps(v).encode("utf-8")
+        self.schema_registry_client = SchemaRegistryClient({"url": schema_registry_url})
+        self.json_serializer = JSONSerializer(
+            schema_str=json_schema,
+            schema_registry_client=self.schema_registry_client,
+        )
 
     def send_message(self, message_dict):
         try:
             # Convert message to JSON string and serialize
-            message_json = self.value_serializer(message_dict)
-            self.producer.produce(self.topic, message_json)
-            logging.info(f"Message Sent: {message_json}")
+            # message_json = self.value_serializer(message_dict)
+            serialized_message = self.json_serializer(
+                message_dict,
+                SerializationContext(self.topic, MessageField.VALUE),
+            )
+            self.producer.produce(self.topic, serialized_message)
+            logging.info(f"Message Sent: {serialized_message}")
         except Exception as e:
             logging.error(f"Error sending message: {e}")
 
@@ -55,7 +65,7 @@ if __name__ == "__main__":
 
     bootstrap_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
     topic = os.environ.get("KAFKA_TOPIC")
-    schema_url = os.environ.get("SCHEMA_URL")
+    schema_registry_url = os.environ.get("SCHEMA_REGISTRY_URL")
 
     """
     Reading using read() function, because SchemaClient register_schema
@@ -67,12 +77,14 @@ if __name__ == "__main__":
     admin = Admin(bootstrap_servers)
     admin.create_topic(topic)
 
-    # Can not test in REDPANDA, Because REDPANDA does not support JSON
+    # Can not test in REDPANDA, Because REDPANDA version 23 does not support JSON
     # https://github.com/redpanda-data/redpanda/issues/14462
-    schema_client = SchemaClient(schema_url, topic, json_schema, "JSON")
+    # It's now supported in 24.2
+    # https://github.com/redpanda-data/redpanda/issues/6220#issuecomment-2401662572
+    schema_client = SchemaClient(schema_registry_url, topic, json_schema, "JSON")
     schema_client.register_schema()
 
-    producer = JSONProducer(bootstrap_servers, topic)
+    producer = JSONProducer(bootstrap_servers, topic, schema_registry_url, json_schema)
 
     try:
         while True:
