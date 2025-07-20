@@ -1,0 +1,102 @@
+{
+  "type": "record",
+  "name": "ComplexUserAvroSchema",
+  "fields": [
+    {
+      "name": "userId",
+      "type": "int"
+    },
+    {
+      "name": "createdAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "User creation timestamp"
+    },
+    {
+      "name": "actionType",
+      "type": {
+        "type": "enum",
+        "name": "UserActionType",
+        "symbols": ["CREATE", "UPDATE", "DELETE"]
+      },
+      "default": "CREATE",
+      "doc": "Action taken on user record"
+    },
+    {
+      "name": "basicInfo",
+      "type": {
+        "type": "record",
+        "name": "BasicInfo",
+        "fields": [
+          { "name": "full_name", "type": "string", "default": "" },
+          { "name": "age", "type": "int", "default": 0 },
+          { "name": "email", "type": "string", "default": "" }
+        ]
+      },
+      "doc": "User's basic information"
+    },
+    {
+      "name": "address",
+      "type": {
+        "type": "record",
+        "name": "Address",
+        "fields": [
+          { "name": "street", "type": "string", "default": "" },
+          { "name": "city", "type": "string", "default": "" },
+          { "name": "postcode", "type": "string", "default": "" },
+          { "name": "country", "type": "string", "default": "" }
+        ]
+      },
+      "doc": "User's postal address"
+    },
+    {
+      "name": "interests",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Interest",
+          "fields": [
+            {
+              "name": "category",
+              "type": {
+                "type": "enum",
+                "name": "InterestCategory",
+                "symbols": ["SPORTS", "MUSIC", "TRAVEL", "READING", "TECH"]
+              }
+            },
+            { "name": "description", "type": "string", "default": "" }
+          ]
+        }
+      },
+      "doc": "User hobbies and interests"
+    },
+    {
+      "name": "preferences",
+      "type": {
+        "type": "record",
+        "name": "Preferences",
+        "fields": [
+          {
+            "name": "newsletterSubscribed",
+            "type": "boolean",
+            "default": false
+          },
+          {
+            "name": "preferredLanguage",
+            "type": "string",
+            "default": "en"
+          },
+          {
+            "name": "darkMode",
+            "type": "boolean",
+            "default": false
+          }
+        ]
+      },
+      "doc": "User preferences for UI or notifications"
+    }
+  ]
+}
