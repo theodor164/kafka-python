@@ -57,7 +57,7 @@ if __name__ == "__main__":
     logging_config.configure_logging()
 
     bootstrap_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
-    topic = os.environ.get("KAFKA_TOPIC")
+    topic = os.environ.get("KAFKA_TOPIC_PRODUCER")
 
     """
     Loading using load(), because validate() function

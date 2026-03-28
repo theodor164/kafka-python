@@ -6,6 +6,7 @@ from confluent_kafka import Consumer
 import logging_config
 import utils
 
+import rgbTest
 
 class ConsumerClass:
     def __init__(self, bootstrap_server, topic, group_id):
@@ -32,12 +33,14 @@ class ConsumerClass:
                     continue
                 byte_message = msg.value()
                 decoded_message = byte_message.decode("utf-8")
+                rgbTest.colorSelection(decoded_message)
                 logging.info(
                     f"Byte message: {byte_message}, Type: {type(byte_message)}"
                 )
                 logging.info(
                     f"Decoded message: {decoded_message}, Type: {type(decoded_message)}"  # noqa: E501
                 )
+
         except KeyboardInterrupt:
             pass
         finally:
@@ -49,7 +52,7 @@ if __name__ == "__main__":
     logging_config.configure_logging()
 
     bootstrap_server = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
-    topic = os.environ.get("KAFKA_TOPIC")
+    topic = os.environ.get("KAFKA_TOPIC_CONSUMER")
     group_id = os.environ.get("KAFKA_GROUP_ID", "my-consumer-group")
 
     consumer = ConsumerClass(bootstrap_server, topic, group_id)

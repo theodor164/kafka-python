@@ -1,12 +1,16 @@
 """The Producer code will manually validate the schema."""
+import DHT11_Python
+import readTemperature
 import logging
 import os
+import time
 
 from confluent_kafka import Producer
 
 import logging_config
 import utils
 from admin import Admin
+
 
 
 class ProducerClass:
@@ -64,7 +68,7 @@ if __name__ == "__main__":
     logging_config.configure_logging()
 
     bootstrap_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
-    topic = os.environ.get("KAFKA_TOPIC")
+    topic = os.environ.get("KAFKA_TOPIC_PRODUCER")
     schema_url = os.environ.get("SCHEMA_URL")
 
     admin = Admin(bootstrap_servers)
@@ -73,8 +77,11 @@ if __name__ == "__main__":
 
     try:
         while True:
-            message = input("Enter any message: ")
-            producer.send_message(message)
+            message = readTemperature.printTemperatureAndHumidity(); 
+            message1 = str(message)
+            producer.send_message(message1)
+            # print(message1)
+            time.sleep(20)
     except KeyboardInterrupt:
         pass
 

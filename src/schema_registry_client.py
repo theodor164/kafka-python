@@ -70,7 +70,7 @@ class SchemaClient:
 if __name__ == "__main__":
     utils.load_env()
     logging_config.configure_logging()
-    topic = os.environ.get("KAFKA_TOPIC")
+    topic = os.environ.get("KAFKA_TOPIC_PRODUCER")
     schema_url = os.environ.get("SCHEMA_REGISTRY_URL")
     schema_type = "AVRO"
 
