@@ -8,7 +8,7 @@ GPIO.setwarnings(True)
 GPIO.setmode(GPIO.BCM)
 
 # read data using pin 14
-instance = dht11.DHT11(pin=14)
+instance = dht11.DHT11(pin=7)
 
 def printTemperatureAndHumidity():
 	try:

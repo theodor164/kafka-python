@@ -1,6 +1,5 @@
 """The Producer code will manually validate the schema."""
-import DHT11_Python
-import readTemperature
+import readBMX280
 import logging
 import os
 import time
@@ -11,28 +10,30 @@ import logging_config
 import utils
 from admin import Admin
 
+isEmergency = False
+emergencyStarted = False
+
+def startEmergency():
+    print("Welcome to Hell")
+
+def stopEmergencyFlag():
+    if stopEmergencyAlgorithm():
+        print("You Can Stop The Emergency")
+
+def stopEmergencyAlgorithm():
+    if isEmergency == False:
+        return True
 
 
 class ProducerClass:
-    """Producer class for sending messages to Kafka."""
-
-    def __init__(
-        self,
-        bootstrap_servers,
-        topic,
-        compression_type=None,
-        message_size=None,
-        batch_size=None,
-        waiting_time=None,
-    ):
-        """Initializes the producer."""
+    def __init__(self, bootstrap_servers, topic, compression_type=None,
+                 message_size=None, batch_size=None, waiting_time=None):
         self.bootstrap_servers = bootstrap_servers
         self.topic = topic
         self.producer_conf = {
             "bootstrap.servers": self.bootstrap_servers,
             "partitioner": "random",
         }
-
         if compression_type:
             self.producer_conf["compression.type"] = compression_type
         if message_size:
@@ -45,20 +46,13 @@ class ProducerClass:
         self.producer = Producer(self.producer_conf)
 
     def send_message(self, message):
-        """Sends a message to Kafka.
-
-        Args:
-            message (str): Message to send.
-        """
         try:
             self.producer.produce(self.topic, message)
-            # self.producer.flush()
             logging.info(f"Message sent to topic {self.topic}: {message}")
         except Exception as e:
             logging.error(f"Error sending message: {e}")
 
     def commit(self):
-        """Commit the message."""
         self.producer.flush()
         logging.info("Messages committed to Kafka.")
 
@@ -69,7 +63,6 @@ if __name__ == "__main__":
 
     bootstrap_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
     topic = os.environ.get("KAFKA_TOPIC_PRODUCER")
-    schema_url = os.environ.get("SCHEMA_URL")
 
     admin = Admin(bootstrap_servers)
     producer = ProducerClass(bootstrap_servers, topic)
@@ -77,11 +70,10 @@ if __name__ == "__main__":
 
     try:
         while True:
-            message = readTemperature.printTemperatureAndHumidity(); 
-            message1 = str(message)
-            producer.send_message(message1)
-            # print(message1)
-            time.sleep(20)
+            message = readBMX280.readSensorData()
+            if message:
+                producer.send_message(message)
+            time.sleep(5)
     except KeyboardInterrupt:
         pass
 

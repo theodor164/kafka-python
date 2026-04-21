@@ -1,7 +1,7 @@
 from gpiozero import RGBLED
 from time import sleep
 
-my_led = RGBLED(21, 20, 16)  # Common cathode
+my_led = RGBLED(18, 15, 14)  # Common cathode
 
 def colorSelection(color):
   if color == "red":
