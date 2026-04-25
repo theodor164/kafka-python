@@ -1,0 +1,8 @@
+!pip install roboflow
+
+from roboflow import Roboflow
+rf = Roboflow(api_key="qwV4ZUauikOevtydrhzr")
+project = rf.workspace("theodors-workspace-qzrlm").project("lego-figures-yfj9c-ql8ng")
+version = project.version(1)
+dataset = version.download("yolov8")
+                

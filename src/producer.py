@@ -1,8 +1,14 @@
-"""The Producer code will manually validate the schema."""
+"""
+Producer multi-senzor cu intervale independente per sursă.
+Fiecare senzor rulează pe propriul thread cu propriul interval.
+"""
 import readBMX280
+import readLegoDetector  # wrapper peste LegoDetector
 import logging
 import os
 import time
+import json
+import threading
 
 from confluent_kafka import Producer
 
@@ -10,52 +16,92 @@ import logging_config
 import utils
 from admin import Admin
 
-isEmergency = False
-emergencyStarted = False
 
-def startEmergency():
-    print("Welcome to Hell")
-
-def stopEmergencyFlag():
-    if stopEmergencyAlgorithm():
-        print("You Can Stop The Emergency")
-
-def stopEmergencyAlgorithm():
-    if isEmergency == False:
-        return True
+# ── Intervale per senzor (secunde) ──────────────────────────
+INTERVAL_BME280   = 30
+INTERVAL_LEGO     = 3
+# ────────────────────────────────────────────────────────────
 
 
 class ProducerClass:
-    def __init__(self, bootstrap_servers, topic, compression_type=None,
-                 message_size=None, batch_size=None, waiting_time=None):
-        self.bootstrap_servers = bootstrap_servers
+    def __init__(self, bootstrap_servers, topic):
         self.topic = topic
-        self.producer_conf = {
-            "bootstrap.servers": self.bootstrap_servers,
+        self._lock = threading.Lock()  # confluent_kafka Producer NU e thread-safe
+        self.producer = Producer({
+            "bootstrap.servers": bootstrap_servers,
             "partitioner": "random",
-        }
-        if compression_type:
-            self.producer_conf["compression.type"] = compression_type
-        if message_size:
-            self.producer_conf["message.max.bytes"] = message_size
-        if batch_size:
-            self.producer_conf["batch.size"] = batch_size
-        if waiting_time:
-            self.producer_conf["linger.ms"] = waiting_time
+            # Micro-batching: așteaptă max 100ms să acumuleze mesaje
+            "linger.ms": 100,
+            # Retry automat la erori tranzitorii
+            "retries": 5,
+            "retry.backoff.ms": 500,
+        })
 
-        self.producer = Producer(self.producer_conf)
+    def send(self, sensor_type: str, payload: dict):
+        """Adaugă sensor_type și trimite mesajul thread-safe."""
+        payload["sensor_type"] = sensor_type
+        message = json.dumps(payload)
 
-    def send_message(self, message):
-        try:
-            self.producer.produce(self.topic, message)
-            logging.info(f"Message sent to topic {self.topic}: {message}")
-        except Exception as e:
-            logging.error(f"Error sending message: {e}")
+        with self._lock:
+            try:
+                self.producer.produce(
+                    self.topic,
+                    value=message.encode("utf-8"),
+                    key=sensor_type.encode("utf-8"),  # key = tip senzor → același consumer
+                    callback=self._delivery_report,
+                )
+                self.producer.poll(0)  # procesează callbacks fără blocare
+            except Exception as e:
+                logging.error(f"[{sensor_type}] Eroare send: {e}")
 
-    def commit(self):
-        self.producer.flush()
-        logging.info("Messages committed to Kafka.")
+    @staticmethod
+    def _delivery_report(err, msg):
+        if err:
+            logging.error(f"Delivery failed: {err}")
+        else:
+            logging.debug(f"Livrat → {msg.topic()} [partition {msg.partition()}]")
 
+    def flush(self):
+        with self._lock:
+            self.producer.flush()
+
+
+# ── Thread-uri independente per senzor ──────────────────────
+
+def thread_bme280(producer: ProducerClass, stop_event: threading.Event):
+    """Citește temperatura/umiditate/presiune la fiecare INTERVAL_BME280 secunde."""
+    logging.info(f"[BME280] Thread pornit, interval={INTERVAL_BME280}s")
+    while not stop_event.is_set():
+        data = readBMX280.readSensorData()  # returnează dict sau None
+        if data:
+            producer.send("bme280", data)
+        stop_event.wait(INTERVAL_BME280)  # wait() în loc de sleep() → oprire imediată
+
+
+def thread_lego(producer: ProducerClass, stop_event: threading.Event):
+    """Citește contorul LEGO la fiecare INTERVAL_LEGO secunde."""
+    detector = readLegoDetector.LegoDetector("models/best.pt")
+    logging.info(f"[LEGO] Thread pornit, interval={INTERVAL_LEGO}s")
+
+    last_count = -1  # trimitem doar când se schimbă contorul
+
+    try:
+        while not stop_event.is_set():
+            count = detector.get_count()
+
+            if count != last_count:  # ← OPTIMIZARE: nu spam dacă nu s-a schimbat nimic
+                producer.send("lego", {
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "lego_count": count,
+                })
+                last_count = count
+
+            stop_event.wait(INTERVAL_LEGO)
+    finally:
+        detector.stop()
+
+
+# ── Entry point ──────────────────────────────────────────────
 
 if __name__ == "__main__":
     utils.load_env()
@@ -65,16 +111,29 @@ if __name__ == "__main__":
     topic = os.environ.get("KAFKA_TOPIC_PRODUCER")
 
     admin = Admin(bootstrap_servers)
-    producer = ProducerClass(bootstrap_servers, topic)
     admin.create_topic(topic)
+
+    producer = ProducerClass(bootstrap_servers, topic)
+    stop_event = threading.Event()
+
+    threads = [
+        threading.Thread(target=thread_bme280, args=(producer, stop_event), daemon=True, name="bme280"),
+        threading.Thread(target=thread_lego,   args=(producer, stop_event), daemon=True, name="lego"),
+        # threading.Thread(target=thread_pir, ...) ← adaugi ușor senzori noi
+    ]
+
+    for t in threads:
+        t.start()
 
     try:
         while True:
-            message = readBMX280.readSensorData()
-            if message:
-                producer.send_message(message)
-            time.sleep(5)
+            time.sleep(1)
     except KeyboardInterrupt:
-        pass
+        logging.info("Oprire gracefully...")
+        stop_event.set()
 
-    producer.commit()
+    for t in threads:
+        t.join(timeout=5)
+
+    producer.flush()
+    logging.info("Producer oprit.")
