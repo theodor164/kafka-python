@@ -79,8 +79,8 @@ def thread_bme280(producer: ProducerClass, stop_event: threading.Event):
 
 
 def thread_lego(producer: ProducerClass, stop_event: threading.Event):
-    """Citește contorul LEGO la fiecare INTERVAL_LEGO secunde."""
-    detector = readLegoDetector.LegoDetector("models/best.pt")
+    model_path = os.path.join(os.path.dirname(__file__), "Camera pi3", "models", "best.pt")
+    detector = readLegoDetector.LegoDetector(model_path)
     logging.info(f"[LEGO] Thread pornit, interval={INTERVAL_LEGO}s")
 
     last_count = -1  # trimitem doar când se schimbă contorul
