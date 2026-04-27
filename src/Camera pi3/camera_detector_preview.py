@@ -41,7 +41,7 @@ class LegoDetector:
                 continue
 
             # 3. Cerem AI-ului să accepte și detecțiile de care e doar 35% sigur (din cauza umbrelor)
-            results = self.model.predict(source=poza_nume, conf=0.35, save=False, verbose=False)
+            results = self.model.predict(source=poza_nume, conf=0.2, save=False, verbose=False)
             
             # Numărăm omuleții
             self.latest_count = len(results[0].boxes)

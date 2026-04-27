@@ -10,6 +10,13 @@ import time
 import json
 import threading
 
+# Import nou în listă
+import readMQ
+
+import readMPU6050
+
+import readCCS811
+
 from confluent_kafka import Producer
 
 import logging_config
@@ -22,6 +29,13 @@ INTERVAL_BME280   = 30
 INTERVAL_LEGO     = 3
 # ────────────────────────────────────────────────────────────
 
+# Intervale
+INTERVAL_MQ9   = 10   # CO se poate schimba rapid
+INTERVAL_MQ135 = 15   # calitate aer — mai lentă
+
+INTERVAL_MPU6050 = 5  # mișcarea se schimbă rapid
+
+INTERVAL_CCS811 = 10
 
 class ProducerClass:
     def __init__(self, bootstrap_servers, topic):
@@ -67,6 +81,41 @@ class ProducerClass:
 
 
 # ── Thread-uri independente per senzor ──────────────────────
+
+def thread_ccs811(producer: ProducerClass, stop_event: threading.Event):
+    logging.info(f"[CCS811] Thread pornit, interval={INTERVAL_CCS811}s")
+    while not stop_event.is_set():
+        data = readCCS811.readCCS811()
+        if data:
+            producer.send("ccs811", data)
+        stop_event.wait(INTERVAL_CCS811)
+
+
+def thread_mpu6050(producer: ProducerClass, stop_event: threading.Event):
+    logging.info(f"[MPU-6050] Thread pornit, interval={INTERVAL_MPU6050}s")
+    while not stop_event.is_set():
+        data = readMPU6050.readMPU6050()
+        if data:
+            producer.send("mpu6050", data)
+        stop_event.wait(INTERVAL_MPU6050)
+
+# Thread MQ-9
+def thread_mq9(producer: ProducerClass, stop_event: threading.Event):
+    logging.info(f"[MQ-9] Thread pornit, interval={INTERVAL_MQ9}s")
+    while not stop_event.is_set():
+        data = readMQ.readMQ9()
+        if data:
+            producer.send("mq9", data)
+        stop_event.wait(INTERVAL_MQ9)
+
+# Thread MQ-135
+def thread_mq135(producer: ProducerClass, stop_event: threading.Event):
+    logging.info(f"[MQ-135] Thread pornit, interval={INTERVAL_MQ135}s")
+    while not stop_event.is_set():
+        data = readMQ.readMQ135()
+        if data:
+            producer.send("mq135", data)
+        stop_event.wait(INTERVAL_MQ135)
 
 def thread_bme280(producer: ProducerClass, stop_event: threading.Event):
     """Citește temperatura/umiditate/presiune la fiecare INTERVAL_BME280 secunde."""
@@ -120,6 +169,10 @@ if __name__ == "__main__":
         threading.Thread(target=thread_bme280, args=(producer, stop_event), daemon=True, name="bme280"),
         threading.Thread(target=thread_lego,   args=(producer, stop_event), daemon=True, name="lego"),
         # threading.Thread(target=thread_pir, ...) ← adaugi ușor senzori noi
+        threading.Thread(target=thread_mq9,    args=(producer, stop_event), daemon=True, name="mq9"),    # ← nou
+        threading.Thread(target=thread_mq135,  args=(producer, stop_event), daemon=True, name="mq135"),  # ← nou
+        threading.Thread(target=thread_mpu6050, args=(producer, stop_event), daemon=True, name="mpu6050"),
+        threading.Thread(target=thread_ccs811, args=(producer, stop_event), daemon=True, name="ccs811"),
     ]
 
     for t in threads:
