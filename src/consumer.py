@@ -1,27 +1,28 @@
+"""
+Consumer Kafka pe Pi — primește comenzi de la Angular
+și le transmite către producer prin queue.
+"""
 import logging
 import os
-
 from confluent_kafka import Consumer
-
 import logging_config
 import utils
 
-import rgbTest
-
 class ConsumerClass:
-    def __init__(self, bootstrap_server, topic, group_id):
-        """Initializes the consumer."""
+    def __init__(self, bootstrap_server, topic, group_id, command_queue=None):
         self.bootstrap_server = bootstrap_server
         self.topic = topic
         self.group_id = group_id
-        self.consumer = Consumer(
-            {"bootstrap.servers": bootstrap_server, "group.id": self.group_id}
-        )
+        self.command_queue = command_queue  # ← queue shared cu producer
+        self.consumer = Consumer({
+            "bootstrap.servers": bootstrap_server,
+            "group.id": self.group_id,
+            "auto.offset.reset": "latest",
+        })
 
     def consume_messages(self):
-        """Consume Messages from Kafka."""
         self.consumer.subscribe([self.topic])
-        logging.info(f"Successfully subscribed to topic: {self.topic}")
+        logging.info(f"[Consumer Pi] Abonat la topic: {self.topic}")
 
         try:
             while True:
@@ -29,31 +30,17 @@ class ConsumerClass:
                 if msg is None:
                     continue
                 if msg.error():
-                    logging.error(f"Consumer error: {msg.error()}")
+                    logging.error(f"[Consumer Pi] Eroare: {msg.error()}")
                     continue
-                byte_message = msg.value()
-                decoded_message = byte_message.decode("utf-8")
-                rgbTest.colorSelection(decoded_message)
-                logging.info(
-                    f"Byte message: {byte_message}, Type: {type(byte_message)}"
-                )
-                logging.info(
-                    f"Decoded message: {decoded_message}, Type: {type(decoded_message)}"  # noqa: E501
-                )
+
+                decoded = msg.value().decode("utf-8")
+                logging.info(f"[Consumer Pi] Comandă primită: {decoded}")
+
+                if decoded == "confirm_revenire" and self.command_queue:
+                    self.command_queue.put("confirm_revenire")
+                    logging.info("[Consumer Pi] Comandă pusă în queue ✅")
 
         except KeyboardInterrupt:
             pass
         finally:
             self.consumer.close()
-
-
-if __name__ == "__main__":
-    utils.load_env()
-    logging_config.configure_logging()
-
-    bootstrap_server = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
-    topic = os.environ.get("KAFKA_TOPIC_CONSUMER")
-    group_id = os.environ.get("KAFKA_GROUP_ID", "my-consumer-group")
-
-    consumer = ConsumerClass(bootstrap_server, topic, group_id)
-    consumer.consume_messages()
