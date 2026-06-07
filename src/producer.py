@@ -120,22 +120,12 @@ def thread_mq135(producer: ProducerClass, stop_event: threading.Event):
 
 def thread_mpu6050(producer: ProducerClass, stop_event: threading.Event):
     logging.info(f"[MPU-6050] Thread pornit, interval={INTERVAL_MPU6050}s")
-    counter = 0
+
     while not stop_event.is_set():
-        counter += 1
+        
         data = readMPU6050.readMPU6050()
 
-        # ── SIMULARE ──
-        if 10 <= counter <= 14:
-            logging.warning(f"[TEST] Simulez cutremur citirea {counter}/14!")
-            data = {
-                "sensor_type": "mpu6050",
-                "timestamp": datetime.datetime.now().isoformat(),
-                "accel_x": 3.0, "accel_y": 2.0, "accel_z": 1.5,
-                "gyro_x": 0.0,  "gyro_y": 0.0,  "gyro_z": 0.0,
-                "temperature": 30.0
-            }
-        # ── SFÂRȘIT SIMULARE ──
+        
 
         if data:
             producer.send("mpu6050", data)
