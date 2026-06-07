@@ -24,14 +24,13 @@ class LegoDetector:
         while self.running:
             # Am adăugat setările pentru înghețarea mișcării (Shutter Speed)
            # 1 & 2: Echilibrul perfect între lumină și înghețarea mișcării
+            # Lăsăm camera să își facă setările automat pentru cea mai bună lumină
             cmd = [
                 "rpicam-jpeg", 
                 "-o", poza_nume, 
-                "-t", "200", 
-                "--shutter", "10000", # 1/100 dintr-o secundă (mult mai luminos!)
-                "--gain", "4.0",      # Forțăm senzorul să extragă lumină din umbre
+                "-t", "500",          # Îi dăm jumătate de secundă să se adapteze la lumina din cameră
                 "--width", "640", 
-                "--height", "480", 
+                "--height", "640",    # Pătrat perfect, fix cum l-am antrenat pe Roboflow!
                 "--nopreview"
             ]
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
