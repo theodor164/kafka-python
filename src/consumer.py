@@ -40,6 +40,13 @@ class ConsumerClass:
                     self.command_queue.put("confirm_revenire")
                     logging.info("[Consumer Pi] Comandă pusă în queue ✅")
 
+                if decoded == "confirm_revenire" and self.command_queue:
+                    self.command_queue.put("confirm_revenire")
+
+                elif decoded == "force_reset" and self.command_queue:   # ← adaugă
+                    self.command_queue.put("force_reset")
+                    logging.info("[Consumer Pi] Force reset pus în queue ✅")
+
         except KeyboardInterrupt:
             pass
         finally:
