@@ -16,6 +16,7 @@ def _get_bus():
     return _bus, _calibration_params
 
 def readSensorData():
+    global _bus, _calibration_params
     with i2c_lock:
         try:
             bus, calibration_params = _get_bus()
@@ -28,5 +29,7 @@ def readSensorData():
                 "pressure":    round(data.pressure, 2),
             }
         except Exception as e:
-            print(f"Eroare citire senzor: {e}")
+            _bus = None
+            _calibration_params = None
+            print(f"[BME280] Eroare citire: {e}")
             return None

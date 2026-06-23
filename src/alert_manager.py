@@ -32,14 +32,22 @@ class AlertManager:
         self.state            = AlertState.NORMAL
         self.lock             = threading.Lock()
         self._revenire_timer  = None
-        self.MAGNITUDINE_PRAG  = 1.8
+        self.MAGNITUDINE_PRAG  = 1.6
         self.MAGNITUDINE_PROBE = 1
-        self.CO_PPM_PRAG       = 500
+        self.CO_PPM_PRAG       = 50
         self.CO2_PPM_PRAG      = 2000
         self.TIMP_REVENIRE     = 10
         self._mag_buffer       = []
         self._last_co          = 0
         self._cooldown_until = 0
+        self._last_air_quality = 0
+        self.AIR_QUALITY_PRAG = 700   # ppm MQ-135
+        self.AIR_QUALITY_LOW_PRAG = 430   # alertă când scade sub 450
+        self._last_co2 = 400
+        self._last_tvoc = 0
+        self.TVOC_PRAG  = 1000   # ppb — sensibil, declanșează la gaz/fum
+        self._occupied = False   # ← adaugă după self._last_tvoc = 0
+        
 
         logging.info("[AlertManager] Inițializat")
         deactivate_all()
@@ -62,51 +70,51 @@ class AlertManager:
         ):
             self._trigger_earthquake()
 
-    def process_air_quality(self, co_ppm: float, co2_ppm: float):
+    def process_air_quality(self, co_ppm: float, co2_ppm: float, air_quality_ppm: float = 0):
         if time.time() < self._cooldown_until:
             return
-        is_critical = co_ppm > self.CO_PPM_PRAG or co2_ppm > self.CO2_PPM_PRAG
+        is_critical = self._last_tvoc > self.TVOC_PRAG
 
         if self.state == AlertState.NORMAL:
             if is_critical:
                 self._trigger_air_alert(co_ppm, co2_ppm)
-
         elif self.state == AlertState.AIR_CRITICAL:
             if is_critical:
-                # Valorile rămân critice — anulează timer-ul de revenire
                 self._cancel_timer()
             else:
-                # Valorile s-au normalizat — pornește timer
                 self._start_revenire_timer()
-
         elif self.state == AlertState.PENDING:
             if is_critical:
-                # Reapare pericolul — reactivează alerta
                 logging.warning("[AlertManager] ⚠️ Aer critic reapărut în PENDING — reactivez!")
                 self._trigger_air_alert(co_ppm, co2_ppm)
 
     def _trigger_earthquake(self):
         with self.lock:
             if self.state == AlertState.NORMAL:
-                # Primă alertă seismică
                 logging.warning("[AlertManager] 🚨 Cutremur declanșat!")
                 self.state = AlertState.EARTHQUAKE
                 self._mag_buffer.clear()
-                activate_earthquake_alert()
+                activate_earthquake_alert(occupied=self._occupied)
                 self._reset_revenire_timer()
 
             elif self.state == AlertState.EARTHQUAKE:
-                # Cutremur continuu — resetează timer-ul
                 logging.warning("[AlertManager] 🔄 Cutremur continuu — resetez timer!")
                 self._mag_buffer.clear()
                 self._reset_revenire_timer()
 
+            elif self.state == AlertState.AIR_CRITICAL:
+                # Cutremur în timp ce aerul e viciat — escaladează
+                logging.warning("[AlertManager] 🚨 CUTREMUR + AER VICIAT — escaladez alerta!")
+                self.state = AlertState.EARTHQUAKE
+                self._mag_buffer.clear()
+                activate_earthquake_alert(occupied=self._occupied)
+                self._reset_revenire_timer()
+
             elif self.state == AlertState.PENDING:
-                # Cutremur nou după perioadă de așteptare — reactivează
                 logging.warning("[AlertManager] 🚨 Cutremur nou în PENDING — reactivez!")
                 self.state = AlertState.EARTHQUAKE
                 self._mag_buffer.clear()
-                activate_earthquake_alert()
+                activate_earthquake_alert(occupied=self._occupied)
                 self._reset_revenire_timer()
 
     def _trigger_air_alert(self, co_ppm, co2_ppm):
@@ -114,7 +122,8 @@ class AlertManager:
             logging.warning(f"[AlertManager] ⚠️ Aer critic! CO={co_ppm} CO2={co2_ppm}")
             self.state = AlertState.AIR_CRITICAL
             self._cancel_timer()
-            activate_air_alert()
+            activate_air_alert(occupied=self._occupied)
+            self._reset_revenire_timer()
 
     def _start_revenire_timer(self):
         with self.lock:
@@ -144,14 +153,22 @@ class AlertManager:
     def _set_pending(self):
         with self.lock:
             if self.state in (AlertState.AIR_CRITICAL, AlertState.EARTHQUAKE):
-                logging.info("[AlertManager] Stare PENDING — așteaptă confirmare Angular")
+                # Dacă TVOC e încă ridicat → prelungește alerta 10s
+                if self._last_tvoc > self.TVOC_PRAG:
+                    logging.warning("[AlertManager] TVOC ridicat — prelungesc alerta cu 10s")
+                    self._revenire_timer = threading.Timer(10, self._set_pending)
+                    self._revenire_timer.start()
+                    return
+                logging.info("[AlertManager] Stare PENDING — așteaptă confirmare")
                 self.state = AlertState.PENDING
                 self._revenire_timer = None
+                self._cooldown_until = time.time() + 3  # 10s cooldown în PENDING
+                self._mag_buffer.clear()
                 activate_pending()
 
     def confirm_revenire(self):
         with self.lock:
-            if self.state in (AlertState.PENDING, AlertState.EARTHQUAKE):
+            if self.state in (AlertState.PENDING, AlertState.EARTHQUAKE, AlertState.AIR_CRITICAL):
                 logging.info("[AlertManager] ✅ Confirmare primită — revenire la NORMAL")
                 self.state = AlertState.NORMAL
                 self._cancel_timer()
@@ -167,7 +184,7 @@ class AlertManager:
             self.state = AlertState.NORMAL
             self._cancel_timer()
             self._mag_buffer.clear()
-            self._cooldown_until = time.time() + 30
+            self._cooldown_until = time.time() + 3
             deactivate_all()
             return True
 

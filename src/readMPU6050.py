@@ -8,7 +8,7 @@ ACCEL_XOUT_H = 0x3B
 GYRO_XOUT_H  = 0x43
 TEMP_OUT_H   = 0x41
 
-_bus = None  # ← singleton
+_bus = None
 
 def _get_bus():
     global _bus
@@ -24,6 +24,7 @@ def read_word_2c(bus, reg):
     return val - 65536 if val >= 0x8000 else val
 
 def readMPU6050() -> dict | None:
+    global _bus
     with i2c_lock:
         try:
             bus = _get_bus()
@@ -42,5 +43,6 @@ def readMPU6050() -> dict | None:
                 "temperature": temp,
             }
         except Exception as e:
+            _bus = None   # ← reset singleton la eroare
             print(f"[MPU-6050] Eroare citire: {e}")
             return None

@@ -26,7 +26,7 @@ class ConsumerClass:
 
         try:
             while True:
-                msg = self.consumer.poll(1.0)
+                msg = self.consumer.poll(0.1)
                 if msg is None:
                     continue
                 if msg.error():
@@ -40,8 +40,6 @@ class ConsumerClass:
                     self.command_queue.put("confirm_revenire")
                     logging.info("[Consumer Pi] Comandă pusă în queue ✅")
 
-                if decoded == "confirm_revenire" and self.command_queue:
-                    self.command_queue.put("confirm_revenire")
 
                 elif decoded == "force_reset" and self.command_queue:   # ← adaugă
                     self.command_queue.put("force_reset")

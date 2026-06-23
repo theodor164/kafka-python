@@ -23,6 +23,9 @@ from alert_manager import AlertManager
 from consumer import ConsumerClass
 from readPersonDetector import PersonDetector
 from readLegoDetector import LegoDetector
+from readMotionDetector import MotionDetector
+# sus, după import-uri
+from shared_camera import SharedCamera
 
 # ── Inițializare globală ─────────────────────────────────────
 command_queue = queue.Queue()
@@ -46,7 +49,7 @@ class ProducerClass:
         self.producer = Producer({
             "bootstrap.servers": bootstrap_servers,
             "partitioner": "random",
-            "linger.ms": 100,
+            "linger.ms": 0,       # ← în loc de 100
             "retries": 5,
             "retry.backoff.ms": 500,
         })
@@ -95,6 +98,7 @@ def thread_lego(producer: ProducerClass, stop_event: threading.Event):
     try:
         while not stop_event.is_set():
             occupied = detector.is_occupied()
+            alert_manager._occupied = occupied   # ← lipsea această linie
             if occupied != last_occupied:
                 producer.send("lego", {
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -104,28 +108,32 @@ def thread_lego(producer: ProducerClass, stop_event: threading.Event):
             stop_event.wait(INTERVAL_LEGO)
     finally:
         detector.stop()
-
-def thread_mq9(producer: ProducerClass, stop_event: threading.Event):
-    logging.info(f"[MQ-9] Thread pornit, interval={INTERVAL_MQ9}s")
+def thread_mq_sensors(producer: ProducerClass, stop_event: threading.Event):
+    logging.info("[MQ] Thread pornit")
     while not stop_event.is_set():
-        data = readMQ.readMQ9()
-        if data:
-            producer.send("mq9", data)
-            alert_manager._last_co = data.get("co_ppm", 0)
-        stop_event.wait(INTERVAL_MQ9)
-
-def thread_mq135(producer: ProducerClass, stop_event: threading.Event):
-    logging.info(f"[MQ-135] Thread pornit, interval={INTERVAL_MQ135}s")
-    while not stop_event.is_set():
-        data = readMQ.readMQ135()
-        if data:
-            producer.send("mq135", data)
-        stop_event.wait(INTERVAL_MQ135)
+        v_mq9, v_mq135 = readMQ.readMQBoth()
+        if v_mq9 is not None:
+            co_ppm = max(0.0, round((v_mq9 / 3.3) * 1000, 2))
+            producer.send("mq9", {
+                "sensor_type": "mq9",
+                "timestamp":   datetime.datetime.now().isoformat(),
+                "voltage":     round(v_mq9, 4),
+                "co_ppm":      co_ppm,
+            })
+        if v_mq135 is not None and v_mq135 > 0.01:
+            air_ppm = max(0.0, round(400 + (v_mq135 / 3.3) * 600, 2))
+            producer.send("mq135", {
+                "sensor_type": "mq135",
+                "timestamp":   datetime.datetime.now().isoformat(),
+                "voltage":     round(v_mq135, 4),
+                "air_quality_ppm": air_ppm,
+            })
+        stop_event.wait(10)
 
 def thread_mpu6050(producer: ProducerClass, stop_event: threading.Event):
     logging.info("[MPU-6050] Thread pornit")
     
-    FAST_INTERVAL = 0.02   # 20ms pentru detectare seism
+    FAST_INTERVAL = 0.15   # 20ms pentru detectare seism
     SEND_INTERVAL = 0.5    # 500ms pentru Kafka/dashboard
     last_send = 0
 
@@ -155,31 +163,33 @@ def thread_ccs811(producer: ProducerClass, stop_event: threading.Event):
         data = readCCS811.readCCS811()
         if data:
             producer.send("ccs811", data)
-            co_ppm  = getattr(alert_manager, '_last_co', 0)
-            co2_ppm = data.get("eco2_ppm", 0)
-            alert_manager.process_air_quality(co_ppm, co2_ppm)
+            alert_manager._last_tvoc = data.get("tvoc_ppb", 0)
+            alert_manager.process_air_quality(0, 0, 0)
             producer.send("alert", {
                 "sensor_type": "alert",
-                "timestamp": data["timestamp"],
-                "state": alert_manager.get_state(),
+                "timestamp":   data["timestamp"],
+                "state":       alert_manager.get_state(),
             })
         stop_event.wait(INTERVAL_CCS811)
 
-def thread_person_detector(producer, stop_event):
-    import logging
-    from readPersonDetector import PersonDetector
- 
-    detector = PersonDetector()
+def thread_motion_detector(producer: ProducerClass, stop_event: threading.Event):
+    detector = MotionDetector(
+        threshold_pixel=25,
+        threshold_motion=500,
+        resolution=(640, 480),
+    )
     detector.start()
- 
-    logging.info("[Camera] Thread detectare persoane pornit")
+    logging.info(f"[Motion] Thread pornit, interval={INTERVAL_CAMERA}s")
     try:
         while not stop_event.is_set():
             data = detector.detect()
-            producer.send("camera", data)
-            stop_event.wait(5)   # interval 5 secunde
+            if data["motion_detected"]:
+                logging.info(f"[Motion] Mișcare! {data['motion_pixels']} pixeli")
+                producer.send("motion", data)
+            stop_event.wait(INTERVAL_CAMERA)
     finally:
-        detector.stop()        
+        detector.stop()
+      
 
 def thread_dht11_esp(producer, stop_event):
     """
@@ -200,18 +210,23 @@ def thread_dht11_esp(producer, stop_event):
         except Exception as e:
             logging.error(f"[DHT11-ESP] Eroare: {e}")
 
-def thread_commands(stop_event: threading.Event):
+def thread_commands(producer: ProducerClass, stop_event: threading.Event):
     logging.info("[Commands] Thread pornit")
     while not stop_event.is_set():
         try:
-            command = command_queue.get(timeout=1)
+            command = command_queue.get(timeout=0.1)  # ← 0.1s în loc de 1s
             if command == "confirm_revenire":
                 result = alert_manager.confirm_revenire()
                 logging.info(f"[Commands] confirm_revenire → {result}")
-
-            elif command == "force_reset":                          # ← adaugă
+            elif command == "force_reset":
                 result = alert_manager.force_reset()
                 logging.warning("[Commands] Force reset executat!")
+            # ← trimite imediat starea nouă
+            producer.send("alert", {
+                "sensor_type": "alert",
+                "timestamp":   datetime.datetime.now().isoformat(),
+                "state":       alert_manager.get_state(),
+            })
         except queue.Empty:
             continue
 
@@ -241,19 +256,30 @@ if __name__ == "__main__":
 
     threads = [
         threading.Thread(target=thread_bme280,         args=(producer, stop_event), daemon=True, name="bme280"),
-        threading.Thread(target=thread_mq9,             args=(producer, stop_event), daemon=True, name="mq9"),
-        threading.Thread(target=thread_mq135,           args=(producer, stop_event), daemon=True, name="mq135"),
         threading.Thread(target=thread_mpu6050,         args=(producer, stop_event), daemon=True, name="mpu6050"),
         threading.Thread(target=thread_ccs811,          args=(producer, stop_event), daemon=True, name="ccs811"),
-        threading.Thread(target=thread_commands,        args=(stop_event,),          daemon=True, name="commands"),
         threading.Thread(target=thread_kafka_consumer,  args=(stop_event,),          daemon=True, name="kafka_consumer"),
         threading.Thread(target=thread_dht11_esp,       args=(producer, stop_event),daemon=True,name="dht11_esp"),
         # threading.Thread(target=thread_person_detector,args=(producer, stop_event),  daemon=True,name="camera"),
         threading.Thread(target=thread_lego, args=(producer, stop_event), daemon=True, name="lego"),
+        threading.Thread(target=thread_mq_sensors, args=(producer, stop_event), daemon=True, name="mq"),
+        threading.Thread(target=thread_commands, args=(producer, stop_event), daemon=True, name="commands"),
+        threading.Thread(target=thread_motion_detector, args=(producer, stop_event), daemon=True, name="motion"),
+         threading.Thread(target=thread_lego,            args=(producer, stop_event, shared_cam), daemon=True, name="lego"),
+    threading.Thread(target=thread_motion_detector, args=(producer, stop_event, shared_cam), daemon=True, name="motion"),
     ]
 
     for t in threads:
         t.start()
+
+    def _startup_message():
+        time.sleep(2)
+        from actuators import lcd_write, deactivate_all
+        lcd_write("Se initializeaza", "Va rugam asteptati")
+        time.sleep(30)
+        deactivate_all()
+
+    threading.Thread(target=_startup_message, daemon=True).start()
 
     try:
         while True:

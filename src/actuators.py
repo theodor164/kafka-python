@@ -176,7 +176,7 @@ def set_buzzer(on: bool):
 
 def set_servo(position: str):
     _init_servo()
-    mapping = {"normal": "min", "alert": "mid", "ventilatie": "max"}
+    mapping = {"normal": "min", "alert": "mid", "ventilatie": "mid"}
     pos = mapping.get(position, "mid")
     if _servo:
         getattr(_servo, pos)()
@@ -189,40 +189,49 @@ def set_servo(position: str):
 # ── LCD ──────────────────────────────────────────────────────
 
 def lcd_write(line1: str, line2: str = ""):
+    from i2c_lock import i2c_lock
     _init_lcd()
-    if LCD_AVAILABLE and lcd:
-        try:
-            lcd.clear()
-            lcd.write_string(line1[:16])
-            if line2:
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string(line2[:16])
-        except Exception as e:
-            logging.warning(f"[LCD] Eroare scriere: {e}")
-    else:
-        logging.info(f"[MOCK LCD] ┌────────────────┐")
-        logging.info(f"[MOCK LCD] │{line1[:16]:<16}│")
-        logging.info(f"[MOCK LCD] │{line2[:16]:<16}│")
-        logging.info(f"[MOCK LCD] └────────────────┘")
+    with i2c_lock:   # ← adaugă
+        if LCD_AVAILABLE and lcd:
+            try:
+                lcd.clear()
+                lcd.write_string(line1[:16])
+                if line2:
+                    lcd.cursor_pos = (1, 0)
+                    lcd.write_string(line2[:16])
+            except Exception as e:
+                logging.warning(f"[LCD] Eroare scriere: {e}")
+        else:
+            logging.info(f"[MOCK LCD] ┌────────────────┐")
+            logging.info(f"[MOCK LCD] │{line1[:16]:<16}│")
+            logging.info(f"[MOCK LCD] │{line2[:16]:<16}│")
+            logging.info(f"[MOCK LCD] └────────────────┘")
 
 # ── Stări sistem ─────────────────────────────────────────────
 
-def activate_earthquake_alert():
-    logging.warning("[ALERTĂ] 🚨 CUTREMUR DETECTAT")
+def activate_earthquake_alert(occupied: bool = False):
     set_led_color("red")
     set_fans(True)
     set_buzzer(True)
-    set_servo("alert")       # 90°
-    lcd_write("!! CUTREMUR !!", "INTRATI ADAPOST")
+    if occupied:
+        set_servo("ventilatie")  # 180° — ușă complet deschisă, evacuare
+        lcd_write("CUTREMUR!", "Iesiti din casa!")
+    else:
+        set_servo("alert")       # 90° — ușă parțial închisă, casa goală
+        lcd_write("CUTREMUR!", "Casa goala")
 
 
-def activate_air_alert():
-    logging.warning("[ALERTĂ] ⚠️ CALITATE AER CRITICĂ")
+
+def activate_air_alert(occupied: bool = False):
     set_led_color("red")
     set_fans(True)
     set_buzzer(True)
-    set_servo("ventilatie")  # 180°
-    lcd_write("AER VICIAT!", "VENTILATIE ON")
+    if occupied:
+        set_servo("ventilatie")  # 180° — ventilație maximă + evacuare
+        lcd_write("AER VICIAT!", "Deschide geamul!")
+    else:
+        set_servo("ventilatie")  # 180° — ventilație automată
+        lcd_write("AER VICIAT!", "Ventilatie auto")
 
 
 def activate_pending():
@@ -234,12 +243,11 @@ def activate_pending():
 
 
 def deactivate_all():
-    logging.info("[Actuatori] ✅ Revenire normală")
     set_led_color("green")
     set_fans(False)
     set_buzzer(False)
-    set_servo("normal")      # 0°
-    lcd_write("ADAPOST ACTIV", "Stare: Normala")
+    set_servo("normal")          # 0° — ușă normală
+    lcd_write("CASA ACTIVA", "Stare: Normala")
 
 # ── Cleanup ──────────────────────────────────────────────────
 
