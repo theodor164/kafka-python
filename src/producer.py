@@ -32,7 +32,7 @@ INTERVAL_BME280  = 30
 INTERVAL_MQ9     = 10
 INTERVAL_MQ135   = 15
 INTERVAL_MPU6050 = 0.1
-INTERVAL_CCS811  = 10
+INTERVAL_CCS811  = 5
 INTERVAL_CAMERA  = 5
 
 # ── Producer Class ───────────────────────────────────────────
@@ -142,7 +142,7 @@ def thread_ccs811(producer: ProducerClass, stop_event: threading.Event):
         stop_event.wait(INTERVAL_CCS811)
 
 def thread_motion_detector(producer: ProducerClass, stop_event: threading.Event):
-    from actuators import set_servo
+    from actuators import set_servo, lcd_write
 
     detector = MotionDetector(
         threshold_pixel=25,
@@ -151,8 +151,9 @@ def thread_motion_detector(producer: ProducerClass, stop_event: threading.Event)
     )
     detector.start()
     logging.info(f"[Motion] Thread pornit, interval={INTERVAL_CAMERA}s")
-    
-    door_open = False  # stare persistentă a ușii
+
+    door_open = False
+    last_motion = None
 
     try:
         while not stop_event.is_set():
@@ -161,17 +162,34 @@ def thread_motion_detector(producer: ProducerClass, stop_event: threading.Event)
             state = alert_manager.get_state()
             alert_active = state in ("earthquake", "air_critical")
 
+            # Actualizează LCD când se schimbă starea de mișcare în timpul alertei
+            if alert_active and motion != last_motion:
+                if state == "earthquake":
+                    if motion:
+                        lcd_write("CUTREMUR!", "Iesiti din casa!")
+                    else:
+                        lcd_write("CUTREMUR!", "Casa goala")
+                elif state == "air_critical":
+                    if motion:
+                        lcd_write("AER VICIAT!", "Deschide geamul!")
+                    else:
+                        lcd_write("AER VICIAT!", "Ventilatie auto")
+                last_motion = motion
+
+            # Reset last_motion când nu e alertă
+            if not alert_active:
+                last_motion = None
+
+            # Logica ușă
             if not door_open:
-                # Deschide ușa DOAR dacă: alertă activă + mișcare detectată
                 if alert_active and motion:
                     logging.info("[Motion] Alertă + mișcare → Ușă DESCHISĂ")
-                    set_servo("ventilatie")  # 180°
+                    set_servo("ventilatie")
                     door_open = True
             else:
-                # Închide ușa DOAR când omul a apăsat confirmare (state = normal)
                 if state == "normal":
                     logging.info("[Motion] Revenire confirmată → Ușă ÎNCHISĂ")
-                    set_servo("normal")  # 0°
+                    set_servo("normal")
                     door_open = False
 
             producer.send("motion", data)
