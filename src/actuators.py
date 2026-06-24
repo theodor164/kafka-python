@@ -176,7 +176,7 @@ def set_buzzer(on: bool):
 
 def set_servo(position: str):
     _init_servo()
-    mapping = {"normal": "min", "alert": "mid", "ventilatie": "mid"}
+    mapping = {"normal": "min", "alert": "mid", "ventilatie": "max"}
     pos = mapping.get(position, "mid")
     if _servo:
         getattr(_servo, pos)()
@@ -217,7 +217,7 @@ def activate_earthquake_alert(occupied: bool = False):
         set_servo("ventilatie")  # 180° — ușă complet deschisă, evacuare
         lcd_write("CUTREMUR!", "Iesiti din casa!")
     else:
-        set_servo("alert")       # 90° — ușă parțial închisă, casa goală
+        # set_servo("alert")       # 90° — ușă parțial închisă, casa goală
         lcd_write("CUTREMUR!", "Casa goala")
 
 
@@ -230,7 +230,7 @@ def activate_air_alert(occupied: bool = False):
         set_servo("ventilatie")  # 180° — ventilație maximă + evacuare
         lcd_write("AER VICIAT!", "Deschide geamul!")
     else:
-        set_servo("ventilatie")  # 180° — ventilație automată
+        # set_servo("ventilatie")  # 180° — ventilație automată
         lcd_write("AER VICIAT!", "Ventilatie auto")
 
 

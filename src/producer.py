@@ -21,11 +21,7 @@ import utils
 from admin import Admin
 from alert_manager import AlertManager
 from consumer import ConsumerClass
-from readPersonDetector import PersonDetector
-from readLegoDetector import LegoDetector
 from readMotionDetector import MotionDetector
-# sus, după import-uri
-from shared_camera import SharedCamera
 
 # ── Inițializare globală ─────────────────────────────────────
 command_queue = queue.Queue()
@@ -33,13 +29,11 @@ alert_manager = AlertManager()
 
 # ── Intervale per senzor (secunde) ──────────────────────────
 INTERVAL_BME280  = 30
-INTERVAL_LEGO    = 3
 INTERVAL_MQ9     = 10
 INTERVAL_MQ135   = 15
 INTERVAL_MPU6050 = 0.1
 INTERVAL_CCS811  = 10
-INTERVAL_DHT11_ESP = 30   # nu e folosit direct — ESP trimite când vrea
-INTERVAL_CAMERA = 5 
+INTERVAL_CAMERA  = 5
 
 # ── Producer Class ───────────────────────────────────────────
 class ProducerClass:
@@ -49,7 +43,7 @@ class ProducerClass:
         self.producer = Producer({
             "bootstrap.servers": bootstrap_servers,
             "partitioner": "random",
-            "linger.ms": 0,       # ← în loc de 100
+            "linger.ms": 0,
             "retries": 5,
             "retry.backoff.ms": 500,
         })
@@ -90,24 +84,6 @@ def thread_bme280(producer: ProducerClass, stop_event: threading.Event):
             producer.send("bme280", data)
         stop_event.wait(INTERVAL_BME280)
 
-def thread_lego(producer: ProducerClass, stop_event: threading.Event):
-    model_path = os.path.join(os.path.dirname(__file__), "Camera pi3", "models", "best.pt")
-    detector = LegoDetector(model_path)
-    logging.info(f"[LEGO] Thread pornit, interval={INTERVAL_LEGO}s")
-    last_occupied = None
-    try:
-        while not stop_event.is_set():
-            occupied = detector.is_occupied()
-            alert_manager._occupied = occupied   # ← lipsea această linie
-            if occupied != last_occupied:
-                producer.send("lego", {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "lego_count": 1 if occupied else 0,
-                })
-                last_occupied = occupied
-            stop_event.wait(INTERVAL_LEGO)
-    finally:
-        detector.stop()
 def thread_mq_sensors(producer: ProducerClass, stop_event: threading.Event):
     logging.info("[MQ] Thread pornit")
     while not stop_event.is_set():
@@ -132,20 +108,14 @@ def thread_mq_sensors(producer: ProducerClass, stop_event: threading.Event):
 
 def thread_mpu6050(producer: ProducerClass, stop_event: threading.Event):
     logging.info("[MPU-6050] Thread pornit")
-    
-    FAST_INTERVAL = 0.15   # 20ms pentru detectare seism
-    SEND_INTERVAL = 0.5    # 500ms pentru Kafka/dashboard
+    FAST_INTERVAL = 0.15
+    SEND_INTERVAL = 0.5
     last_send = 0
-
     while not stop_event.is_set():
         data = readMPU6050.readMPU6050()
         now = time.time()
-
         if data:
-            # Detectare alertă la fiecare 20ms
             alert_manager.process_mpu6050(data)
-
-            # Trimite în Kafka doar la fiecare 500ms
             if now - last_send >= SEND_INTERVAL:
                 producer.send("mpu6050", data)
                 producer.send("alert", {
@@ -154,7 +124,6 @@ def thread_mpu6050(producer: ProducerClass, stop_event: threading.Event):
                     "state": alert_manager.get_state(),
                 })
                 last_send = now
-
         stop_event.wait(FAST_INTERVAL)
 
 def thread_ccs811(producer: ProducerClass, stop_event: threading.Event):
@@ -173,35 +142,49 @@ def thread_ccs811(producer: ProducerClass, stop_event: threading.Event):
         stop_event.wait(INTERVAL_CCS811)
 
 def thread_motion_detector(producer: ProducerClass, stop_event: threading.Event):
+    from actuators import set_servo
+
     detector = MotionDetector(
         threshold_pixel=25,
-        threshold_motion=500,
+        threshold_motion=50000,
         resolution=(640, 480),
     )
     detector.start()
     logging.info(f"[Motion] Thread pornit, interval={INTERVAL_CAMERA}s")
+    
+    door_open = False  # stare persistentă a ușii
+
     try:
         while not stop_event.is_set():
             data = detector.detect()
-            if data["motion_detected"]:
-                logging.info(f"[Motion] Mișcare! {data['motion_pixels']} pixeli")
-                producer.send("motion", data)
+            motion = data["motion_detected"]
+            state = alert_manager.get_state()
+            alert_active = state in ("earthquake", "air_critical")
+
+            if not door_open:
+                # Deschide ușa DOAR dacă: alertă activă + mișcare detectată
+                if alert_active and motion:
+                    logging.info("[Motion] Alertă + mișcare → Ușă DESCHISĂ")
+                    set_servo("ventilatie")  # 180°
+                    door_open = True
+            else:
+                # Închide ușa DOAR când omul a apăsat confirmare (state = normal)
+                if state == "normal":
+                    logging.info("[Motion] Revenire confirmată → Ușă ÎNCHISĂ")
+                    set_servo("normal")  # 0°
+                    door_open = False
+
+            producer.send("motion", data)
             stop_event.wait(INTERVAL_CAMERA)
     finally:
+        set_servo("normal")
         detector.stop()
-      
 
 def thread_dht11_esp(producer, stop_event):
-    """
-    Citește din queue-ul populat de http_receiver
-    și trimite datele în Kafka.
-    """
-    import logging
     logging.info("[DHT11-ESP] Thread pornit, așteaptă date de la ESP8266")
     while not stop_event.is_set():
         try:
             data = dht11_queue.get(timeout=1)
-            # Adaugă timestamp server-side dacă lipsește
             if "timestamp" not in data:
                 data["timestamp"] = datetime.datetime.now().isoformat()
             producer.send("dht11_esp", data)
@@ -214,14 +197,13 @@ def thread_commands(producer: ProducerClass, stop_event: threading.Event):
     logging.info("[Commands] Thread pornit")
     while not stop_event.is_set():
         try:
-            command = command_queue.get(timeout=0.1)  # ← 0.1s în loc de 1s
+            command = command_queue.get(timeout=0.1)
             if command == "confirm_revenire":
                 result = alert_manager.confirm_revenire()
                 logging.info(f"[Commands] confirm_revenire → {result}")
             elif command == "force_reset":
                 result = alert_manager.force_reset()
                 logging.warning("[Commands] Force reset executat!")
-            # ← trimite imediat starea nouă
             producer.send("alert", {
                 "sensor_type": "alert",
                 "timestamp":   datetime.datetime.now().isoformat(),
@@ -255,18 +237,14 @@ if __name__ == "__main__":
     start_http_receiver(port=5002)
 
     threads = [
-        threading.Thread(target=thread_bme280,         args=(producer, stop_event), daemon=True, name="bme280"),
-        threading.Thread(target=thread_mpu6050,         args=(producer, stop_event), daemon=True, name="mpu6050"),
-        threading.Thread(target=thread_ccs811,          args=(producer, stop_event), daemon=True, name="ccs811"),
-        threading.Thread(target=thread_kafka_consumer,  args=(stop_event,),          daemon=True, name="kafka_consumer"),
-        threading.Thread(target=thread_dht11_esp,       args=(producer, stop_event),daemon=True,name="dht11_esp"),
-        # threading.Thread(target=thread_person_detector,args=(producer, stop_event),  daemon=True,name="camera"),
-        threading.Thread(target=thread_lego, args=(producer, stop_event), daemon=True, name="lego"),
-        threading.Thread(target=thread_mq_sensors, args=(producer, stop_event), daemon=True, name="mq"),
-        threading.Thread(target=thread_commands, args=(producer, stop_event), daemon=True, name="commands"),
-        threading.Thread(target=thread_motion_detector, args=(producer, stop_event), daemon=True, name="motion"),
-         threading.Thread(target=thread_lego,            args=(producer, stop_event, shared_cam), daemon=True, name="lego"),
-    threading.Thread(target=thread_motion_detector, args=(producer, stop_event, shared_cam), daemon=True, name="motion"),
+        threading.Thread(target=thread_bme280,          args=(producer, stop_event), daemon=True, name="bme280"),
+        threading.Thread(target=thread_mpu6050,          args=(producer, stop_event), daemon=True, name="mpu6050"),
+        threading.Thread(target=thread_ccs811,           args=(producer, stop_event), daemon=True, name="ccs811"),
+        threading.Thread(target=thread_kafka_consumer,   args=(stop_event,),          daemon=True, name="kafka_consumer"),
+        threading.Thread(target=thread_dht11_esp,        args=(producer, stop_event), daemon=True, name="dht11_esp"),
+        threading.Thread(target=thread_mq_sensors,       args=(producer, stop_event), daemon=True, name="mq"),
+        threading.Thread(target=thread_commands,         args=(producer, stop_event), daemon=True, name="commands"),
+        threading.Thread(target=thread_motion_detector,  args=(producer, stop_event), daemon=True, name="motion"),
     ]
 
     for t in threads:
